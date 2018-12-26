@@ -1,56 +1,38 @@
-﻿using MySql.Data.MySqlClient;
+﻿using LiteDB;
 using Rocket.Core.Logging;
 using System;
+using System.IO;
+using Logger = Rocket.Core.Logging.Logger;
 
 namespace fr34kyn01535.Uconomy
 {
     public class DatabaseManager
     {
-        internal DatabaseManager()
-        {
-            new I18N.West.CP1250(); //Workaround for database encoding issues with mono
-            CheckSchema();
-        }
+        public string Name = "Uconomy";
+        public string Path;
+        public LiteCollection<Account> Base;
 
-        private MySqlConnection createConnection()
+        public DatabaseManager()
         {
-            MySqlConnection connection = null;
-            try
+            Path = Directory.GetCurrentDirectory() + System.IO.Path.DirectorySeparatorChar + "Database" + System.IO.Path.DirectorySeparatorChar + Name + ".db";
+            Logger.Log(Path);
+            if (!Directory.Exists(Directory.GetCurrentDirectory() + System.IO.Path.DirectorySeparatorChar + "Database"))
             {
-                if (Uconomy.Instance.Configuration.Instance.DatabasePort == 0) Uconomy.Instance.Configuration.Instance.DatabasePort = 3306;
-                connection = new MySqlConnection(String.Format("SERVER={0};DATABASE={1};UID={2};PASSWORD={3};PORT={4};", Uconomy.Instance.Configuration.Instance.DatabaseAddress, Uconomy.Instance.Configuration.Instance.DatabaseName, Uconomy.Instance.Configuration.Instance.DatabaseUsername, Uconomy.Instance.Configuration.Instance.DatabasePassword, Uconomy.Instance.Configuration.Instance.DatabasePort));
+                Directory.CreateDirectory((Directory.GetCurrentDirectory() + System.IO.Path.DirectorySeparatorChar + "Database"));
             }
-            catch (Exception ex)
-            {
-                Logger.LogException(ex);
-            }
-            return connection;
+            var db = new LiteDatabase(Path);
+            Base = db.GetCollection<Account>(Name);
+            Logger.Log("LiteDB loaded.");
         }
-
+        
         /// <summary>
         /// returns the current balance of an account
         /// </summary>
-        /// <param name="steamId"></param>
+        /// <param name="steamId">SteamID of a player</param>
         /// <returns></returns>
         public decimal GetBalance(string id)
         {
-            decimal output = 0;
-            try
-            {
-                MySqlConnection connection = createConnection();
-                MySqlCommand command = connection.CreateCommand();
-                command.CommandText = "select `balance` from `" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "` where `steamId` = '" + id.ToString() + "';";
-                connection.Open();
-                object result = command.ExecuteScalar();
-                if (result != null) Decimal.TryParse(result.ToString(), out output);
-                connection.Close();
-                Uconomy.Instance.OnBalanceChecked(id, output);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogException(ex);
-            }
-            return output;
+            return Base.FindOne(x => x.ID == ulong.Parse(id)).Balance;
         }
 
         /// <summary>
@@ -61,75 +43,26 @@ namespace fr34kyn01535.Uconomy
         /// <returns>the new balance</returns>
         public decimal IncreaseBalance(string id, decimal increaseBy)
         {
-            decimal output = 0;
-            try
-            {
-                MySqlConnection connection = createConnection();
-                MySqlCommand command = connection.CreateCommand();
-                command.CommandText = "update `" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "` set `balance` = balance + (" + increaseBy + ") where `steamId` = '" + id.ToString() + "'; select `balance` from `" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "` where `steamId` = '" + id.ToString() + "'";
-                connection.Open();
-                object result = command.ExecuteScalar();
-                if (result != null) Decimal.TryParse(result.ToString(), out output);
-                connection.Close();
-                Uconomy.Instance.BalanceUpdated(id, increaseBy);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogException(ex);
-            }
-            return output;
+            var account = Base.FindOne(x => x.ID == ulong.Parse(id));
+            account.Balance += increaseBy;
+            Base.Update(account);
+            return account.Balance;
         }
 
         
         public void CheckSetupAccount(Steamworks.CSteamID id)
         {
-            try
+            if (Base.FindOne(x => x.ID == id.m_SteamID) == null)
             {
-                MySqlConnection connection = createConnection();
-                MySqlCommand command = connection.CreateCommand();
-                int exists = 0;
-                command.CommandText = "SELECT EXISTS(SELECT 1 FROM `" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "` WHERE `steamId` ='" + id + "' LIMIT 1);";
-                connection.Open();
-                object result = command.ExecuteScalar();
-                if (result != null) Int32.TryParse(result.ToString(), out exists);
-                connection.Close();
-
-                if (exists == 0)
-                {
-                    command.CommandText = "insert ignore into `" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "` (balance,steamId,lastUpdated) values(" + Uconomy.Instance.Configuration.Instance.InitialBalance + ",'" + id.ToString() + "',now())";
-                    connection.Open();
-                    command.ExecuteNonQuery();
-                    connection.Close();
-                }
+                Base.Insert(new Account() { ID = id.m_SteamID, Balance = Uconomy.Instance.Configuration.Instance.InitialBalance });
             }
-            catch (Exception ex)
-            {
-                Logger.LogException(ex);
-            }
-
         }
+        
 
-        internal void CheckSchema()
+        public class Account
         {
-            try
-            {
-                MySqlConnection connection = createConnection();
-                MySqlCommand command = connection.CreateCommand();
-                command.CommandText = "show tables like '" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "'";
-                connection.Open();
-                object test = command.ExecuteScalar();
-
-                if (test == null)
-                {
-                    command.CommandText = "CREATE TABLE `" + Uconomy.Instance.Configuration.Instance.DatabaseTableName + "` (`steamId` varchar(32) NOT NULL,`balance` decimal(15,2) NOT NULL DEFAULT '25.00',`lastUpdated` timestamp NOT NULL DEFAULT NOW() ON UPDATE CURRENT_TIMESTAMP,PRIMARY KEY (`steamId`)) ";
-                    command.ExecuteNonQuery();
-                }
-                connection.Close();
-            }
-            catch (Exception ex)
-            {
-                Logger.LogException(ex);
-            }
+            public ulong ID { get; set; }
+            public decimal Balance { get; set; }
         }
     }
 }
